@@ -1,7 +1,7 @@
 from io import BytesIO
 import re
 from datetime import datetime
-import pdfplumber
+from pypdf import PdfReader
 from converters.ofx_builder import build_ofx
 
 
@@ -19,11 +19,11 @@ def parse_brazilian_money(value_text):
 
 
 def extract_text_from_pdf(file_bytes):
+    reader = PdfReader(BytesIO(file_bytes))
     text_parts = []
 
-    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
-        for page in pdf.pages:
-            text_parts.append(page.extract_text() or "")
+    for page in reader.pages:
+        text_parts.append(page.extract_text() or "")
 
     return "\n".join(text_parts)
 
@@ -132,7 +132,8 @@ def convert_pdf_to_ofx(file_bytes, bank_id="000", account_id="000000", account_t
     if not transactions:
         raise ValueError(
             "Nenhuma transação encontrada. Este PDF pode ser imagem. "
-            "Use Excel ou PDF estruturado. Para PDF imagem, use a versão local com OCR."
+            "Na versão web, use Excel ou PDF com texto selecionável. "
+            "PDF imagem deve ser convertido na versão local com OCR."
         )
 
     ofx = build_ofx(
