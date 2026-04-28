@@ -2,7 +2,6 @@ from io import BytesIO
 import re
 from datetime import datetime
 import pdfplumber
-import pytesseract
 from converters.ofx_builder import build_ofx
 
 
@@ -29,24 +28,11 @@ def extract_text_from_pdf(file_bytes):
     return "\n".join(text_parts)
 
 
-def extract_text_with_ocr(file_bytes):
-    text_parts = []
-
-    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
-        for page in pdf.pages:
-            img = page.to_image(resolution=300)
-            pil_img = img.original
-            text = pytesseract.image_to_string(pil_img, lang="eng")
-            text_parts.append(text)
-
-    return "\n".join(text_parts)
-
-
 def parse_bg_bank_pdf(text):
     transactions = []
 
     dates = re.findall(r"\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}", text)
-    values = re.findall(r"-R\$\s?[\d\.]+,\d{2}", text)
+    values = re.findall(r"-?R\$\s?[\d\.]+,\d{2}", text)
 
     if dates and values:
         total = min(len(dates), len(values))
@@ -96,16 +82,58 @@ def parse_bg_bank_pdf(text):
     return transactions
 
 
-def convert_pdf_to_ofx(file_bytes, bank_id="000", account_id="000000", account_type="CHECKING", layout="Automático"):
-    text = extract_text_from_pdf(file_bytes)
+def parse_pagseguro_pdf(text):
+    transactions = []
+
+    pattern = re.compile(
+        r"(\d{2}/\d{2}/\d{4})\s+(.+?)\s+(-?R\$\s?[\d\.]+,\d{2})"
+    )
+
+    for match in pattern.finditer(text):
+        memo = match.group(2).strip()
+
+        if memo.lower().startswith("saldo do dia"):
+            continue
+
+        amount = parse_brazilian_money(match.group(3))
+
+        if amount is None:
+            continue
+
+        transactions.append({
+            "date": datetime.strptime(match.group(1), "%d/%m/%Y"),
+            "memo": memo,
+            "amount": amount
+        })
+
+    return transactions
+
+
+def parse_transactions_by_layout(text, layout):
+    if layout == "BG Bank PDF":
+        return parse_bg_bank_pdf(text)
+
+    if layout == "PagSeguro PDF":
+        return parse_pagseguro_pdf(text)
+
     transactions = parse_bg_bank_pdf(text)
 
     if not transactions:
-        text = extract_text_with_ocr(file_bytes)
-        transactions = parse_bg_bank_pdf(text)
+        transactions = parse_pagseguro_pdf(text)
+
+    return transactions
+
+
+def convert_pdf_to_ofx(file_bytes, bank_id="000", account_id="000000", account_type="CHECKING", layout="Automático"):
+    text = extract_text_from_pdf(file_bytes)
+
+    transactions = parse_transactions_by_layout(text, layout)
 
     if not transactions:
-        raise ValueError("Nenhuma transação encontrada mesmo com OCR.")
+        raise ValueError(
+            "Nenhuma transação encontrada. Este PDF pode ser imagem. "
+            "Use Excel ou PDF estruturado. Para PDF imagem, use a versão local com OCR."
+        )
 
     ofx = build_ofx(
         transactions=transactions,
